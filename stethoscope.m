@@ -75,6 +75,14 @@ have a nx1 vector of actual plotting elements so we can remove when needed
 have a nx2 vector with vital data where [x, y] is [currentTime, vitalValue]
 %}
 % START
+
+% Data struct is used as a large structure to store everything I need to
+% make important calculations such as time required per x-axis sweep, or
+% plot value matrix, and etc. The heartData Struct is then used to store
+% important information that the application as a whole will need such as
+% estimated BPM, number of beats counted currently and total, and elapsed
+% time in order to perform the calculation.
+
 clear; clc; clf;
 dataStruct.smoothingFactor = 6; % Radius of smoothing
 dataStruct.currentTime = 0;
@@ -176,6 +184,16 @@ function newVitalData(src, ~)
     %disp('Raw Data Bytes:');
     %disp(rawData');
     %write(src, uint8(0x05), "withoutresponse");
+
+    % in the code below, I parse the bytes recieved by arduino and focus on
+    % the 3 bytes recieved where one byte is the time delta in milliseconds
+    % and the last 2 are the vital value. I did some simple arithmetic to
+    % extract the value of the bytes by taking 256 times the greatest byte
+    % and adding that with 1 times the least byte. Afterward, I then call
+    % my callback function createOrModifyNewPlotPoint to get the fun
+    % started with processing data and adjusting our global data structures
+    % further.
+
     if length(rawData) >= 5
         payload = typecast(rawData(1:2, 1), 'uint16');
         commandByte = typecast(rawData(3, 1), 'uint8');
@@ -192,6 +210,11 @@ function createOrModifyNewPlotPoint(deltaTime, vitalValue) % Pass in deltaTime a
     ds = getappdata(0, 'dataStruct');
     heartData = getappdata(0, 'heartdata');
     ds.currentIndex = ds.currentIndex + 1;
+
+    % Before doing anything, I must addour cummulative time by the time
+    % delta recieved by arduino, almost like how integration works in
+    % calculus! I do this before doing ANYTHING ELSE! (aside from retriving
+    % our global data values)
     
     ds.currentTime = ds.currentTime + deltaTime;
 
@@ -253,6 +276,12 @@ function createOrModifyNewPlotPoint(deltaTime, vitalValue) % Pass in deltaTime a
 
                     if xSpan > 1
                         minPeakDist = min(400, xSpan * 0.8);
+                        % In the above line, we are essentially specifying
+                        % our peaks to be a certain distance and anything
+                        % past that distance will be disconsidered. the 0.8
+                        % was a value achieved through trial and error.
+                        % Essentially, we are reducing the radius of our
+                        % peak by 0.2 to get that 0.8.
                         [peaksBeats, locsBeats] = findpeaks(ySlice, xSlice, 'MinPeakProminence', 100, 'MinPeakDistance', minPeakDist);
                     else
                         peaksBeats = [];
@@ -261,18 +290,26 @@ function createOrModifyNewPlotPoint(deltaTime, vitalValue) % Pass in deltaTime a
 
                     NUM_OF_PEAKS = numel(peaksBeats);
 
+                    % We will count the number of peaks, then add this to
+                    % our counter to then determine BPM.
+
                     heartData.heartBeatsCounted = heartData.heartBeatsCounted + NUM_OF_PEAKS;
 
                     if heartData.heartBeatsCounted >= heartData.heartBeatsCountedMax
 
+                        % using dimensional anaylysis, I derived this
+                        % formula to determine BPM based on how much time
+                        % it takes heart to beat a fixed number of times.
+
                         estimatedBPM = (heartData.heartBeatsCounted / heartData.elapsedTimeForCount) * 60000;
                         
                         heartData.BPM = estimatedBPM;
-                        heartData.BPMFound = true;
+                        heartData.BPMFound = true; % A flag for the next code block (based on if this variable is true)
             
                         fprintf("Your BPM is %.0f \n", estimatedBPM);
             
-            
+                        % Below, we reset our count and elapsed time back
+                        % to initial to get more accurate readings after
             
                         heartData.heartBeatsCounted = 0;
                         heartData.elapsedTimeForCount = 0;
@@ -282,8 +319,20 @@ function createOrModifyNewPlotPoint(deltaTime, vitalValue) % Pass in deltaTime a
 
             
                     ds.totalHeartBeats = ds.totalHeartBeats + NUM_OF_PEAKS;
+
+                    % Below is where we add "x"'s to our plot in order to
+                    % locate peaks and see them!
                 
                     addpoints(ds.hPeaks, locsBeats, peaksBeats);
+
+                    % Below, I set the currentTimeIndex to be where our
+                    % sampling data ends so in the next sample, we know
+                    % where to start since each sample will include
+                    % previous data in the same window.
+
+                    % I did this because I don't want to recount the same
+                    % heartbeats that were already counted in the previous
+                    % smoothing calls
 
                     ds.currentTimeIndex = endIdx;
                 else
@@ -291,6 +340,12 @@ function createOrModifyNewPlotPoint(deltaTime, vitalValue) % Pass in deltaTime a
                 end
 
                 if isvalid(ds.hSmooth)
+                    % We want to make sure ds.hSmooth is valid or exists
+                    % before doing this just for safety since this caused
+                    % me errors before.
+
+                    % Just clear the smooth points in the smoothing frame
+                    % and replace with the new smooth points
                     clearpoints(ds.hSmooth);
                     addpoints(ds.hSmooth, tSorted, ySmooth);
                 end
@@ -300,6 +355,12 @@ function createOrModifyNewPlotPoint(deltaTime, vitalValue) % Pass in deltaTime a
             if heartData.BPMFound
                 subplot(2, 1, 2); 
                 delete(findobj(gca, 'Type', 'Text'));
+
+                % this entire block is simple. When we have a BPM that is
+                % calculated from the previous code block, remove text and
+                % replace it with new text that shows sampling rate, BPM,
+                % total beats, and a personalized message when needed be
+                % based on a conditional
                 
                 sampleRateText = sprintf("%.0f samples per second", (ds.currentIndex / ds.currentTime) * 1000);
                 text(1500, 700, sampleRateText, "FontSize", 16, "Color", "r", "FontWeight", "bold");
@@ -324,22 +385,45 @@ function createOrModifyNewPlotPoint(deltaTime, vitalValue) % Pass in deltaTime a
         end
     end
 
+    % We will always be plotting new raw values based directly on what is
+    % recieved by arduino.
+
     addpoints(ds.hRaw, ds.currentTime, vitalValue);
 
     if ds.currentTime >= ds.maxTime
         if ~ds.firstLoopComplete
-            ds.firstLoopComplete = true;
+            ds.firstLoopComplete = true; % This used to be useful
         end
         
         % Time to smooth!
         tVec = ds.allPlotValues(1:ds.currentIndex, 1);
         yVec = ds.allPlotValues(1:ds.currentIndex, 2);
 
+        % The above varibles will for sure be the same size since the same
+        % indeces are specified and by chain reaction of being used over
+        % and over again
+
+        % I mentioned this in a video, but i state the number 31 here
+        % because the win means the window in which a heartbeat occurs and
+        % I want this to be small so the ripples afterward will be
+        % disconsidered.
+
         win = min(31, ds.currentIndex);
 
         [tUnique, ia] = unique(tVec, 'stable');
 
         [tSorted, ta] = sort(tUnique, "ascend");
+
+        % By doing sort and unique, I am able to cut out any duplicate
+        % values and sort them in ascending order because the "findpeaks"
+        % function does not take duplicates or non-organized data sets.
+        % This was very confusing because the error messages did not
+        % specify the line causing issues in MY code, but it was stating
+        % issues within the parsing code which is out of my reach. I had to
+        % do research on this and ask AI why I was even getting this issue
+        % and it told me that I was recieving the issue from the
+        % "findpeaks" function and that I needed to make sure I had the
+        % values sorted and have duplicates all removed before proceeding.
 
         yVecSorted = yVec(ia(ta));
 
@@ -348,22 +432,54 @@ function createOrModifyNewPlotPoint(deltaTime, vitalValue) % Pass in deltaTime a
             win = win - 1;
         end
 
+        % In startIdx, I make sure that the first parameter of the min is
+        % always greater tha 1 for safety without modifying the actual
+        % variable if it is under 1. In general, the startIdx and endIdx is
+        % based on the smoothing interval we want so we can smooth out and
+        % determine the number of heart beats that occur in that interval
+        % only and not in the entire sample, causing recounts and bad BPM
+        % values.
+
         startIdx = min(max(1, ds.currentTimeIndex), length(yVecSorted));
         endIdx = length(yVecSorted);
 
-        if length(yVecSorted) == length(tSorted) && (endIdx - startIdx + 1) >= 3
+        if length(yVecSorted) == length(tSorted) && (endIdx - startIdx + 1) >= 3 % Make sure lengths are equal, or errors will occur and spam our feed
             if win >= 3
                 ySmooth = smoothdata(yVecSorted, "movmean", win, "SamplePoints", tSorted);
 
                 xSlice = tSorted(startIdx:endIdx);
                 ySlice = ySmooth(startIdx:endIdx);
                 xSpan = xSlice(end) - xSlice(1);
+
+                % I reuse the same algorithm from above down here since it
+                % works and I became tired to the point of reusing what I
+                % had above. Essentially xSlice and ySlice are the time and
+                % vital slices that are based on the smoothing interval and
+                % xSpan is the x-axis range we will be working with. I will
+                % then multiply this by 0.8 which will help us determine
+                % how wide a peak will be with a cap (clamping) at a value
+                % of 400. At this point, our peak distances will become
+                % more picky and once again, disconsider ripples.
+
                 if xSpan > 1
                     minPeakDist = min(400, xSpan * 0.8);
+                    % The peak prominnace I use here being 100 is purely
+                    % based on trying difference values. When I used 50, it
+                    % was not picky enough and when I used 200, it was
+                    % getting no peak values so it was too picky. 100 was
+                    % the sweet spot.
                     [peaksBeats, ~] = findpeaks(ySlice, xSlice, 'MinPeakProminence', 100, 'MinPeakDistance', minPeakDist);
                 else
                     peaksBeats = [];
                 end
+
+                % Same as a couple of hundred lines ago where I determine
+                % the number of peaks and add it to the count and deterine
+                % if we surpassed the number of hearts required to perform
+                % a calculation. Remember, if we go over by one or two,
+                % thats fine. Just do the regular calcuation with the
+                % elapsed time and everything, and it will work out
+                % nicely.
 
                 NUM_OF_PEAKS = numel(peaksBeats);
         
@@ -376,6 +492,9 @@ function createOrModifyNewPlotPoint(deltaTime, vitalValue) % Pass in deltaTime a
                 ySmooth = smoothdata(yVecSorted, "movmean", win);
             end
         else
+            % This was for debugging. This was never called which is good!
+            % But sort of frustarting since it means this is not the reason
+            % for my program not working :(
             disp("NOOOO HERE IS THE PROBLEM IN THE LAST SECTION");
         end
 
@@ -396,6 +515,10 @@ function createOrModifyNewPlotPoint(deltaTime, vitalValue) % Pass in deltaTime a
 
         % STOP
 
+        % After finishing with the entire x axis and we go back, we must
+        % clear our points, but this isnt nearly as bad as clearing
+        % "plot" points rather than the "animatedline" plot LINES.
+
         if isvalid(ds.hSmooth)
             clearpoints(ds.hSmooth);
         end
@@ -413,6 +536,15 @@ function createOrModifyNewPlotPoint(deltaTime, vitalValue) % Pass in deltaTime a
         if heartData.BPMFound
             subplot(2, 1, 2); 
             delete(findobj(gca, 'Type', 'Text'));
+
+            %{
+            
+                Below, I print out statements such as the sampling
+                frequency from the arduino, estimated BPM, total beats, and
+                a personalized message for the client if their BPM is too
+                high or too low.
+            
+            %}
             
             sampleRateText = sprintf("%.0f samples per second", (ds.currentIndex / ds.currentTime) * 1000);
             text(1500, 700, sampleRateText, "FontSize", 16, "Color", "r", "FontWeight", "bold");
@@ -435,15 +567,29 @@ function createOrModifyNewPlotPoint(deltaTime, vitalValue) % Pass in deltaTime a
             heartData.elapsedTimeForCount = 0;
         end
 
+        % Below, I set index back to 0 and time back to 0 so our x-axis can
+        % go back to 0 properly.
+
         ds.currentIndex = 0;
         ds.currentTime = 0;
         
     end
 
+    % Set the global app data! This is so we make sure our global data
+    % actually changes and that we werent just messing with a copy the
+    % whole time (reference vs copy in c++)
+
     setappdata(0, 'dataStruct', ds);
     setappdata(0, 'heartdata', heartData);
 
     drawnow limitrate
+
+    % We must use drawnow limitrate because it will simply render at a
+    % specific rate and I do this once every 70 frames (which is about one
+    % time a second) and it great for animation and making the line
+    % rendering very smooth. I had to research for this because I spent
+    % days working on this bug in particular and wondering why it was
+    % running slow desepite using "animatedline" objects.
 
     if mod(ds.currentIndex, 70) == 0
         drawnow limitrate;
