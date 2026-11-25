@@ -75,6 +75,102 @@ have a nx1 vector of actual plotting elements so we can remove when needed
 have a nx2 vector with vital data where [x, y] is [currentTime, vitalValue]
 %}
 % START
+clear; clc; clf;
+dataStruct.smoothingFactor = 6; % Radius of smoothing
+dataStruct.currentTime = 0;
+dataStruct.totalTime = 0;
+dataStruct.currentIndex = 0;
+dataStruct.maxTime = 8000;
+dataStruct.allPlotPoints = gobjects(1, 1000); % For the actal plot() elements
+dataStruct.allPlotValues = zeros(4000, 2); % for [currentTime, vitalValue]
+dataStruct.firstLoopComplete = false; % Create or recycle plot points
+
+dataStruct.totalHeartBeats = 0;
+
+dataStruct.sampleCount = 1;
+
+xlabel("time (0 -> 7 seconds)"); ylabel("Vital"); title("Stethoscope");
+hold on;
+heartBeatData.initIndexOfHeartBeat = 0;
+heartBeatData.finalIndexOfHeartBeat = 0;
+heartBeatData.initTimeOfHeartBeat = 0;
+heartBeatData.finalTimeOfHeartBeat = 0;
+heartBeatData.currentVectorOfPulse(1, 1:2) = [0 0];
+heartBeatData.timeToMaxVitalMatrix(1, 1:2) = [0 0]; % [timeOccured vitalValue] for plotting and determining BPM
+heartBeatData.currentBPM = 0; % Use based off the last 3 timeToMaxVitalMatrix rows
+heartBeatData.allBPM(1) = 0;
+heartBeatData.currentlyStoringHeartBeat = false;
+heartBeatData.restartedDuringActiveHeartBeat = false;
+
+heartBeatData.BPM = 0;
+heartBeatData.BPMFound = false;
+
+heartBeatData.heartBeatsCounted = 0;
+heartBeatData.heartBeatsCountedMax = 10;
+heartBeatData.elapsedTimeForCount = 0;
+
+heartBeatData.beatsInSegment = 0;
+
+
+heartBeatData.allPeaks(1, 1:2) = [0 0];
+%heartBeatData.allPeakIDX(1) = 1;
+
+heartBeatData.smoothDataValues(1, 1:2) = [0 0];
+heartBeatData.smoothDataPlots(1) = 0;
+
+setappdata(0, 'heartdata', heartBeatData);
+
+subplot(2, 1, 1); cla;
+title("Raw Vital Monitor (No DSP)");
+xlabel("time (m/s)");
+ylabel("Vital Units");
+
+ax1 = subplot(2, 1, 1);
+
+dataStruct.hRaw = animatedline(ax1, 'Color', 'r', 'LineWidth', 1.2);
+
+xlim([0 dataStruct.maxTime]);
+ylim([200 800]);
+
+%hold on;
+
+subplot(2, 1, 2); cla;
+title("Filtered Vital Monitor (With DSP)");
+xlabel("time (m/s)");
+ylabel("Vital Units (filtered)");
+
+ax2 = subplot(2, 1, 2);
+
+dataStruct.hSmooth = animatedline(ax2, 'Color', 'b', 'LineWidth', 1.5);
+dataStruct.hPeaks  = animatedline(ax2, 'LineStyle', 'None', 'Marker', 'x', 'Color', 'r', 'LineWidth', 1.5);
+
+dataStruct.smoothingInterval = 3000;
+dataStruct.smoothingIntervalCounter = 0;
+
+dataStruct.currentTimeIndex = 1;
+
+xlim([0 dataStruct.maxTime]);
+ylim([200 800]);
+
+%hold on;
+
+% END
+startSendingVitalsByte = uint8(0x10);
+stopSendingVitalsByte = uint8(0x08);
+disp('Scanning for BLE devices...');
+deviceList = blelist;
+disp(deviceList);
+device = ble("Heart Rate Monitor"); 
+disp('Connected to Arduino!');
+disp(device.Characteristics);
+serviceUUID = "19b10000-e8f2-537e-4f6c-d104768a1214";
+charUUID    = "ca164c88-9eee-47a0-8c1f-f875f38d0351";
+setappdata(0, 'dataStruct', dataStruct);
+c = characteristic(device, serviceUUID, charUUID);
+c.DataAvailableFcn = @(src, event) newVitalData(src, event);
+dataStruct.characteristic = c;
+setappdata(0, 'dataStruct', dataStruct);
+
 function newVitalData(src, ~)
     rawData = read(src, 'oldest')';
     %disp('Raw Data Bytes:');
@@ -100,264 +196,243 @@ function createOrModifyNewPlotPoint(deltaTime, vitalValue) % Pass in deltaTime a
     ds.currentTime = ds.currentTime + deltaTime;
 
     heartData.elapsedTimeForCount = heartData.elapsedTimeForCount + deltaTime;
+
+    ds.smoothingIntervalCounter = ds.smoothingIntervalCounter + deltaTime;
+
+    ds.totalTime = ds.totalTime + deltaTime;
     
     % before the slope calculation attempts to read them.
     ds.allPlotValues(ds.currentIndex, 1:2) = [ds.currentTime, vitalValue];
-    
-
-    
-
-    %{
-    
-        FIND PEAKS HERE
-    
-    %}
-
-    
-
-    
-
-    %heartData.allPeakIDX = allIdx;
-
-    % To get time: ds.allPlotValues(idx, 1);
-
-
-    
 
     subplot(2, 1, 2);
-    hold on;
+    %hold on;
     xlim([0 ds.maxTime]); % DELETE (maybe)
-    ylim([0 1300]); % DELETE (maybe)
+    %ylim([0 1300]); % DELETE (maybe)
 
     NUM_OF_PEAKS = 0;
 
     NEW_BEAT_DETECTED = false;
 
-    if size(ds.allPlotValues, 1) >= 5
-        tVec = ds.allPlotValues(:, 1);
-        yVec = ds.allPlotValues(:, 2);
-
-        win = min(200, size(ds.allPlotValues, 1));
-        if mod(win, 2) == 0
-            win = win - 1;
-        end
-
-        if win >= 3
-            ySmooth = smoothdata(yVec, "sgolay", win, "SamplePoints", tVec);
-        else
-            ySmooth = smoothdata(yVec, "movmean", win);
-        end
-
-        clearpoints(ds.hSmooth);
-        addpoints(ds.hSmooth, tVec, ySmooth);
-
-        [peaks, locs] = findpeaks(ySmooth, tVec, 'MinPeakProminence', 120, 'MinPeakDistance', 0.6);
-
-        clearpoints(ds.hPeaks);
-        if ~isempty(locs)
-            addpoints(ds.hPeaks, locs, peaks);
-        end
-
-        NUM_OF_PEAKS = numel(peaks);
-
-        if heartData.beatsInSegment ~= NUM_OF_PEAKS
-            NEW_BEAT_DETECTED = true;
-            heartData.beatsInSegment = NUM_OF_PEAKS;
-        end
+    
+    %HERE IS NEW CODE
+    
+    if isvalid(ds.hSmooth)
+        addpoints(ds.hSmooth, ds.currentTime, vitalValue);
     end
 
-    if NEW_BEAT_DETECTED
-        heartData.heartBeatsCounted = heartData.heartBeatsCounted + 1;
-        
-        if heartData.heartBeatsCounted >= heartData.heartBeatsCountedMax
-            estimatedBPM = (heartData.heartBeatsCountedMax / heartData.elapsedTimeForCount) * 60000;
-            fprintf("BPM: %.0f", estimatedBPM);
-            heartData.BPM = estimatedBPM;
-            heartData.BPMFound = true;
-            heartData.elapsedTimeForCount = 0;
-            heartData.heartBeatsCounted = 0;
-        else
-            fprintf("Heartbeat %d out of %d completed \n", heartData.heartBeatsCounted, heartData.heartBeatsCountedMax);
-        end
-    end
+    if ds.smoothingIntervalCounter >= ds.smoothingInterval
 
+        if ds.currentIndex >= 5
+            % Time to smooth!
+            tVec = ds.allPlotValues(1:ds.currentIndex, 1);
+            yVec = ds.allPlotValues(1:ds.currentIndex, 2);
+    
+            win = min(31, ds.currentIndex);
 
-    
+            [tUnique, ia] = unique(tVec, 'stable');
 
-    %{
-    
-    If the slope surpasses a certain threshold, check if we already
-    surpassed.
-    If we already did, do the whole operation of finding the relative peak
-    value, store in matrix, and reset both flags
-    If not, set the first flag as true to make sure we check for the next
-    heart beat to detect a peak value
-    
-    %}
-    
-    ds.totalTime = ds.totalTime + deltaTime;
-    if ds.firstLoopComplete
-        hold on;
-        if ds.currentIndex <= length(ds.allPlotPoints) && isgraphics(ds.allPlotPoints(ds.currentIndex)) 
-            ds.allPlotPoints(ds.currentIndex).XData = ds.currentTime;
-            ds.allPlotPoints(ds.currentIndex).YData = vitalValue;
-            
-            if ds.currentIndex + 20 <= length(ds.allPlotPoints)
-                for l = 1:19
-                    if isgraphics(ds.allPlotPoints(ds.currentIndex + l)) && ds.allPlotPoints(ds.currentIndex + l).XData >= ds.allPlotPoints(ds.currentIndex).XData
-                        ds.allPlotPoints(ds.currentIndex + l).YData = 0;
-                    end
-                end
-            else 
-                difference = length(ds.allPlotPoints) - ds.currentIndex;
-                for l = 1:difference
-                    if isgraphics(ds.allPlotPoints(ds.currentIndex + l)) && ds.allPlotPoints(ds.currentIndex + l).XData >= ds.allPlotPoints(ds.currentIndex).XData
-                        ds.allPlotPoints(ds.currentIndex + l).YData = 0;
-                    end
-                end
+            [tSorted, ta] = sort(tUnique, "ascend");
+
+            yVecSorted = yVec(ia(ta));
+
+            win = min(win, length(yVecSorted));
+            if mod(win, 2) == 0
+                win = win - 1;
             end
-           
-        else
-            subplot(2, 1, 1);
-            ds.allPlotPoints(ds.currentIndex) = plot(ds.currentTime, vitalValue, 'rx');
-            % ds.allPlotValues is already recorded at the top of the function
+
+            startIdx = min(max(1, ds.currentTimeIndex), length(yVecSorted));
+            endIdx = length(yVecSorted);
+
+            if length(yVecSorted) == length(tSorted) && (endIdx - startIdx + 1) >= 3
+                if win >= 3
+                    ySmooth = smoothdata(yVecSorted, "movmean", win, "SamplePoints", tSorted);
+
+                    xSlice = tSorted(startIdx:endIdx);
+                    ySlice = ySmooth(startIdx:endIdx);
+                    xSpan = xSlice(end) - xSlice(1); % Getting time difference for peak distance min calculation in next line
+
+                    if xSpan > 1
+                        minPeakDist = min(400, xSpan * 0.8);
+                        [peaksBeats, locsBeats] = findpeaks(ySlice, xSlice, 'MinPeakProminence', 100, 'MinPeakDistance', minPeakDist);
+                    else
+                        peaksBeats = [];
+                        locsBeats = [];
+                    end
+
+                    NUM_OF_PEAKS = numel(peaksBeats);
+
+                    heartData.heartBeatsCounted = heartData.heartBeatsCounted + NUM_OF_PEAKS;
+
+                    if heartData.heartBeatsCounted >= heartData.heartBeatsCountedMax
+
+                        estimatedBPM = (heartData.heartBeatsCounted / heartData.elapsedTimeForCount) * 60000;
+                        
+                        heartData.BPM = estimatedBPM;
+                        heartData.BPMFound = true;
+            
+                        fprintf("Your BPM is %.0f \n", estimatedBPM);
+            
+            
+            
+                        heartData.heartBeatsCounted = 0;
+                        heartData.elapsedTimeForCount = 0;
+                    end
+
+                    disp(NUM_OF_PEAKS + " peaks detected");
+
+            
+                    ds.totalHeartBeats = ds.totalHeartBeats + NUM_OF_PEAKS;
+                
+                    addpoints(ds.hPeaks, locsBeats, peaksBeats);
+
+                    ds.currentTimeIndex = endIdx;
+                else
+                    ySmooth = smoothdata(yVecSorted, "movmean", win);
+                end
+
+                if isvalid(ds.hSmooth)
+                    clearpoints(ds.hSmooth);
+                    addpoints(ds.hSmooth, tSorted, ySmooth);
+                end
+
+            end
+
+            if heartData.BPMFound
+                subplot(2, 1, 2); 
+                delete(findobj(gca, 'Type', 'Text'));
+                
+                sampleRateText = sprintf("%.0f samples per second", (ds.currentIndex / ds.currentTime) * 1000);
+                text(1500, 700, sampleRateText, "FontSize", 16, "Color", "r", "FontWeight", "bold");
+                
+                totalBeatsText = sprintf("Total Beats: %.0f", ds.totalHeartBeats);
+                text(1500, 500, totalBeatsText, "FontSize", 16, "Color", "r", "FontWeight", "bold");
+                
+                BPMText = sprintf("Your BPM: %.0f", heartData.BPM);
+                text(1500, 600, BPMText, "FontSize", 16, "Color", "r", "FontWeight", "bold");
+                
+                heartData.BPMFound = false;
+            end
+    
+            ds.smoothingIntervalCounter = 0; % Set this back to 0 to go back to counting
+
         end
-        
-    else
-        hold on;
-        subplot(2, 1, 1);
-        ds.allPlotPoints(ds.currentIndex) = plot(ds.currentTime, vitalValue, 'rx');
-        % ds.allPlotValues is already recorded at the top of the function
     end
-    
-    
+
+    addpoints(ds.hRaw, ds.currentTime, vitalValue);
+
     if ds.currentTime >= ds.maxTime
         if ~ds.firstLoopComplete
             ds.firstLoopComplete = true;
         end
-        ds.currentTime = 0;
-        %disp(ds.currentTime);
-        ds.currentIndex = 0;
-        heartData.beatsInSegment = 0;
-        % We must clear this out in order to reset the BPM peak detector
-        % calculations
-
         
+        % Time to smooth!
+        tVec = ds.allPlotValues(1:ds.currentIndex, 1);
+        yVec = ds.allPlotValues(1:ds.currentIndex, 2);
 
-        %heartData.allPeakIDX = [];
+        win = min(31, ds.currentIndex);
 
-        
+        [tUnique, ia] = unique(tVec, 'stable');
 
-        ds.allPlotValues = [];
-        subplot(2, 1, 1); cla;
-        subplot(2, 1, 2); cla;
+        [tSorted, ta] = sort(tUnique, "ascend");
 
-        ds.hSmooth = animatedline('Color', 'b', 'LineWidth', 1.5);
-        ds.hPeaks  = animatedline('LineStyle', 'none', 'Marker', 'x', 'Color', 'r', 'LineWidth', 1.5);
-        
-        if heartData.BPMFound
-            textValue = sprintf("Your BPM: %.0f", heartData.BPM);
+        yVecSorted = yVec(ia(ta));
 
-            text(1500, 1000, textValue, "FontSize", 12, "Color", "r");
+        win = min(win, length(yVecSorted));
+        if mod(win, 2) == 0
+            win = win - 1;
         end
+
+        startIdx = min(max(1, ds.currentTimeIndex), length(yVecSorted));
+        endIdx = length(yVecSorted);
+
+        if length(yVecSorted) == length(tSorted) && (endIdx - startIdx + 1) >= 3
+            if win >= 3
+                ySmooth = smoothdata(yVecSorted, "movmean", win, "SamplePoints", tSorted);
+
+                xSlice = tSorted(startIdx:endIdx);
+                ySlice = ySmooth(startIdx:endIdx);
+                xSpan = xSlice(end) - xSlice(1);
+                if xSpan > 1
+                    minPeakDist = min(400, xSpan * 0.8);
+                    [peaksBeats, ~] = findpeaks(ySlice, xSlice, 'MinPeakProminence', 100, 'MinPeakDistance', minPeakDist);
+                else
+                    peaksBeats = [];
+                end
+
+                NUM_OF_PEAKS = numel(peaksBeats);
+        
+                disp(NUM_OF_PEAKS + " peaks detected");
+        
+                heartData.heartBeatsCounted = heartData.heartBeatsCounted + NUM_OF_PEAKS;
+        
+                ds.totalHeartBeats = ds.totalHeartBeats + NUM_OF_PEAKS;
+            else
+                ySmooth = smoothdata(yVecSorted, "movmean", win);
+            end
+        else
+            disp("NOOOO HERE IS THE PROBLEM IN THE LAST SECTION");
+        end
+
+        ds.currentTimeIndex = 1;
+
+        if heartData.heartBeatsCounted >= heartData.heartBeatsCountedMax
+
+            estimatedBPM = (heartData.heartBeatsCounted / heartData.elapsedTimeForCount) * 60000;
+            
+            heartData.BPM = estimatedBPM;
+            heartData.BPMFound = true;
+
+            fprintf("Your BPM is %.0f \n", estimatedBPM);
+
+        end
+
+        heartData.heartBeatsCounted = 1;
+        heartData.elapsedTimeForCount = 0;
+
+        % STOP
+
+        if isvalid(ds.hSmooth)
+            clearpoints(ds.hSmooth);
+        end
+        
+        if isvalid(ds.hPeaks)
+            clearpoints(ds.hPeaks);
+        end
+
+        if isvalid(ds.hRaw)
+            clearpoints(ds.hRaw);
+        end
+
+        subplot(2, 1, 2);
+                
+        if heartData.BPMFound
+            subplot(2, 1, 2); 
+            delete(findobj(gca, 'Type', 'Text'));
+            
+            sampleRateText = sprintf("%.0f samples per second", (ds.currentIndex / ds.currentTime) * 1000);
+            text(1500, 700, sampleRateText, "FontSize", 16, "Color", "r", "FontWeight", "bold");
+            
+            totalBeatsText = sprintf("Total Beats: %.0f", ds.totalHeartBeats);
+            text(1500, 500, totalBeatsText, "FontSize", 16, "Color", "r", "FontWeight", "bold");
+            
+            BPMText = sprintf("Your BPM: %.0f", heartData.BPM);
+            text(1500, 600, BPMText, "FontSize", 16, "Color", "r", "FontWeight", "bold");
+            
+            heartData.BPMFound = false;
+        end
+
+        ds.currentIndex = 0;
+        ds.currentTime = 0;
         
     end
 
-    
-    
-    
     setappdata(0, 'dataStruct', ds);
     setappdata(0, 'heartdata', heartData);
+
+    drawnow limitrate
+
+    if mod(ds.currentIndex, 70) == 0
+        drawnow limitrate;
+    end
+
 end
-clear all; clc; clf;
-dataStruct.smoothingFactor = 6; % Radius of smoothing
-dataStruct.currentTime = 0;
-dataStruct.totalTime = 0;
-dataStruct.currentIndex = 0;
-dataStruct.maxTime = 3000;
-dataStruct.allPlotPoints = gobjects(1, 1000); % For the actal plot() elements
-dataStruct.allPlotValues(1, 1:2) = [0, 0]; % for [currentTime, vitalValue]
-dataStruct.firstLoopComplete = false; % Create or recycle plot points
-
-xlabel("time (0 -> 7 seconds)"); ylabel("Vital"); title("Stethoscope");
-hold on;
-heartBeatData.initIndexOfHeartBeat = 0;
-heartBeatData.finalIndexOfHeartBeat = 0;
-heartBeatData.initTimeOfHeartBeat = 0;
-heartBeatData.finalTimeOfHeartBeat = 0;
-heartBeatData.currentVectorOfPulse(1, 1:2) = [0 0];
-heartBeatData.timeToMaxVitalMatrix(1, 1:2) = [0 0]; % [timeOccured vitalValue] for plotting and determining BPM
-heartBeatData.currentBPM = 0; % Use based off the last 3 timeToMaxVitalMatrix rows
-heartBeatData.allBPM(1) = 0;
-heartBeatData.currentlyStoringHeartBeat = false;
-heartBeatData.restartedDuringActiveHeartBeat = false;
-
-heartBeatData.BPM = 0;
-heartBeatData.BPMFound = false;
-
-heartBeatData.heartBeatsCounted = 0;
-heartBeatData.heartBeatsCountedMax = 5;
-heartBeatData.elapsedTimeForCount = 0;
-
-heartBeatData.beatsInSegment = 0;
-
-
-heartBeatData.allPeaks(1, 1:2) = [0 0];
-%heartBeatData.allPeakIDX(1) = 1;
-
-heartBeatData.smoothDataValues(1, 1:2) = [0 0];
-heartBeatData.smoothDataPlots(1) = 0;
-
-setappdata(0, 'heartdata', heartBeatData);
-
-subplot(2, 1, 1); cla;
-title("Raw Vital Monitor (No DSP)");
-xlabel("time (m/s)");
-ylabel("Vital Units");
-
-xlim([0 dataStruct.maxTime]);
-ylim([300 1300]);
-
-hold on;
-
-subplot(2, 1, 2); cla;
-title("Filtered Vital Monitor (With DSP)");
-xlabel("time (m/s)");
-ylabel("Vital Units (filtered)");
-
-dataStruct.hSmooth = animatedline('Color', 'b', 'LineWidth', 1.5);
-dataStruct.hPeaks  = animatedline('LineStyle', 'none', 'Marker', 'x', 'Color', 'r', 'LineWidth', 1.5);
-
-xlim([0 dataStruct.maxTime]);
-ylim([300 1300]);
-
-hold on;
-
-% END
-startSendingVitalsByte = uint8(0x10);
-stopSendingVitalsByte = uint8(0x08);
-disp('Scanning for BLE devices...');
-deviceList = blelist;
-disp(deviceList);
-device = ble("Heart Rate Monitor"); 
-disp('Connected to Arduino!');
-disp(device.Characteristics);
-serviceUUID = "19b10000-e8f2-537e-4f6c-d104768a1214";
-charUUID    = "ca164c88-9eee-47a0-8c1f-f875f38d0351";
-setappdata(0, 'dataStruct', dataStruct);
-c = characteristic(device, serviceUUID, charUUID);
-c.DataAvailableFcn = @(src, event) newVitalData(src, event);
-dataStruct.characteristic = c;
-setappdata(0, 'dataStruct', dataStruct);
-
-%{
-
-TO-DO
-
-- Fix double beat issue
-- Still running slow!
-
-
-
-
-%}
