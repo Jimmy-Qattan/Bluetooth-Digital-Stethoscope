@@ -309,6 +309,12 @@ function createOrModifyNewPlotPoint(deltaTime, vitalValue) % Pass in deltaTime a
                 
                 BPMText = sprintf("Your BPM: %.0f", heartData.BPM);
                 text(1500, 600, BPMText, "FontSize", 16, "Color", "r", "FontWeight", "bold");
+
+                if heartData.BPM >= 110
+                    text(3000, 700, "YOUR BPM IS HIGH", "FontSize", 16, "Color", "r", "FontWeight", "bold");
+                elseif heartData.BPM <= 50
+                    text(3000, 700, "YOUR BPM IS LOW", "FontSize", 16, "Color", "r", "FontWeight", "bold");
+                end
                 
                 heartData.BPMFound = false;
             end
@@ -386,8 +392,7 @@ function createOrModifyNewPlotPoint(deltaTime, vitalValue) % Pass in deltaTime a
 
         end
 
-        heartData.heartBeatsCounted = 1;
-        heartData.elapsedTimeForCount = 0;
+        
 
         % STOP
 
@@ -417,8 +422,17 @@ function createOrModifyNewPlotPoint(deltaTime, vitalValue) % Pass in deltaTime a
             
             BPMText = sprintf("Your BPM: %.0f", heartData.BPM);
             text(1500, 600, BPMText, "FontSize", 16, "Color", "r", "FontWeight", "bold");
+
+            if heartData.BPM >= 110
+                text(3000, 700, "YOUR BPM IS HIGH", "FontSize", 16, "Color", "r", "FontWeight", "bold");
+            elseif heartData.BPM <= 50
+                text(3000, 700, "YOUR BPM IS LOW", "FontSize", 16, "Color", "r", "FontWeight", "bold");
+            end
             
             heartData.BPMFound = false;
+
+            heartData.heartBeatsCounted = 1;
+            heartData.elapsedTimeForCount = 0;
         end
 
         ds.currentIndex = 0;
